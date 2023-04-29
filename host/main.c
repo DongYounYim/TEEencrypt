@@ -35,6 +35,69 @@
 /* To the the UUID (found the the TA's h-file(s)) */
 #include <TEEencrypt_ta.h>
 
+// For RSA
+#define RSA_KEY_SIZE 1024
+#define RSA_MAX_PLAIN_LEN_1024 86
+#define RSA_CIPHER_LEN_1024 (RSA_KEY_SIZE / 8)
+
+struct ta_attrs {
+	TEEC_Context ctx;
+	TEEC_Session sess;
+};
+
+void prepare_ta_session(struct ta_attrs *ta) {
+	TEEC_UUID uuid = TA_TEEencrypt_UUID;
+	uint32_t origin;
+	TEEC_Result res;
+	
+	res = TEEC_InitializeContext(NULL, &ta->ctx);
+	if (res != TEEC_SUCCESS)
+		errx(1, "\nTEEC_InitializeContext failed with code 0x%x\n", res);
+	
+	res = TEEC_OpenSession(&ta->ctx, &ta->sess, &uuid, TEEC_LOGIN_PUBLIC, NULL, NULL, &origin);
+	if (res != TEEC_SUCCESS)
+		errx(1, "\nTEEC_OpenSession failed with code 0x%x origin 0x%x\n", res, origin);
+}
+
+void terminate_tee_session(struct ta_attrs *ta) {
+	TEEC_CloseSession(&ta->sess);
+	TEEC_FinalizeContext(&ta->ctx);
+}
+
+void prepare_op(TEEC_Operation *op, char *in, size_t in_sz, char *out, size_t out_sz) {
+	memset(op, 0, sizeof(*op));
+
+	op->paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT, TEEC_MEMREF_TEMP_OUTPUT, TEEC_NONE, TEEC_NONE);
+	op->params[0].tmpref.buffer = in;
+	op->params[0].tmpref.size = in_sz;
+	op->params[1].tmpref.buffer = out;
+	op->params[1].tmpref.size = out_sz;
+
+}
+
+void rsa_gen_keys(struct ta_attrs *ta) {
+	TEEC_Result res;
+	
+	res = TEEC_InvokeCommand(&ta->sess, TA_RSA_CMD_GENKEYS, NULL, NULL);
+	if (res != TEEC_SUCCESS) {
+		errx(1, "\nTEEC_InvokeCommand(TA_RSA_CMD_GENKEYS) failed %#x\n", res);
+	}
+	printf("\n============== Keys already generated. ===========\n");
+}
+
+void rsa_encrypt(struct ta_attrs *ta, char *in, size_t in_sz, char *out, size_t out_sz) {
+	TEEC_Operation op;
+	uint32_t origin;
+	TEEC_Result res;
+	printf("\n============== RSA ENCRYPT CA SIZE ============\n");
+	prepare_op(&op, in, in_sz, out, out_sz);
+
+	res = TEEC_InvokeCommand(&ta->sess, TA_RSA_CMD_ENCRYPT, &op, &origin);
+	if(res != TEEC_SUCCESS)
+		errx(1, "\nTEEC_InvokeCommand(TA_RSA_CMD_ENCRYPT) failed 0x%x origin 0x%x\n", res, origin);
+	printf("\nThe text sent was encrypted: %s\n", out);
+}
+
 int main(int argc, char* argv[])
 {
 	TEEC_Result res;
@@ -45,10 +108,12 @@ int main(int argc, char* argv[])
 	uint32_t err_origin;
 	FILE *fp = 0;
 
-	int len = 64;
-	char text[64] = {0,};
-	char encrypt_text[64] = {0,};
+	int len = 1024;
+	char text[1024] = {0,};
+	char encrypt_text[1024] = {0,};
 	char encrypt_key[2] = {0,};
+
+	struct ta_attrs ta;
 
 	res = TEEC_InitializeContext(NULL, &ctx);
 
@@ -66,7 +131,6 @@ int main(int argc, char* argv[])
 
 	if (strcmp(argv[0], "TEEencrypt") == 0) {
 		if(strcmp(argv[1], "-e") == 0) {
-			//normal encryption	
 			//openfile and get normalText in file
 			if(fp=fopen(argv[2], "r")) {
 				fgets(text, sizeof(text), fp);
@@ -74,28 +138,41 @@ int main(int argc, char* argv[])
 				printf("Text : %s", op.params[0].tmpref.buffer);
 				fclose(fp);
 			}
-			//get_RANDOM_KEY
-			res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_GET, &op,
-						&err_origin);
-			
-			//encrypt text			
-			res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_ENC_VALUE, &op,
-						&err_origin);
-			
-			//write encryptText in New File and Save
-			if(fp = fopen("ciphertext.txt", "w")) {
-				fprintf(fp, op.params[0].tmpref.buffer);
-				printf("Ciphertext : %s", op.params[0].tmpref.buffer);
-				fclose(fp);
-			}
-			//encrypt randomKey
-			res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_ENC, &op,
-						&err_origin);
-			//write encryptRandomKey in New File and Save
-			if(fp = fopen("encryptedkey.txt", "w")) {
-				fprintf(fp, op.params[0].tmpref.buffer);
-				printf("encryptedKey : %s\n", op.params[0].tmpref.buffer);
-				fclose(fp);
+			//normal encryption
+			if(strcmp(argv[3], "Caesar") == 0) {
+				//get_RANDOM_KEY
+				res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_GET, &op,
+							&err_origin);
+				
+				//encrypt text			
+				res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_ENC_VALUE, &op,
+							&err_origin);
+				
+				//write encryptText in New File and Save
+				if(fp = fopen("ciphertext.txt", "w")) {
+					fprintf(fp, op.params[0].tmpref.buffer);
+					printf("Ciphertext : %s", op.params[0].tmpref.buffer);
+					fclose(fp);
+				}
+				//encrypt randomKey
+				res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_ENC, &op,
+							&err_origin);
+				//write encryptRandomKey in New File and Save
+				if(fp = fopen("encryptedkey.txt", "w")) {
+					fprintf(fp, op.params[0].tmpref.buffer);
+					printf("encryptedKey : %s\n", op.params[0].tmpref.buffer);
+					fclose(fp);
+				}
+			} else if (strcmp(argv[3], "RSA") == 0) {
+				prepare_ta_session(&ta);	
+				
+				rsa_gen_keys(&ta);
+				rsa_encrypt(&ta, text, RSA_MAX_PLAIN_LEN_1024, encrypt_text, RSA_CIPHER_LEN_1024);
+				if(fp = fopen("ciphertext.txt", "w")) {
+					fprintf(fp, encrypt_text);
+					printf("Ciphertext : %s", encrypt_text);
+					fclose(fp);
+				}
 			}
 		}
 		else if(strcmp(argv[1], "-d") == 0) {
